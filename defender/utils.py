@@ -285,11 +285,12 @@ def lockout_response(request):
         return HttpResponseRedirect(config.LOCKOUT_URL)
 
     if config.COOLOFF_TIME:
-        return HttpResponse("Account locked: too many login attempts.  "
-                            "Please try again later.")
+        return HttpResponse("Too many login attempts. Please try again later.",
+                            status=429)
     else:
-        return HttpResponse("Account locked: too many login attempts.  "
-                            "Contact an admin to unlock your account.")
+        return HttpResponse("Too many login attempts. "
+                            "Contact an admin to unlock your account.",
+                            status=429)
 
 
 def is_user_already_locked(username):
