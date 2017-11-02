@@ -197,7 +197,7 @@ def record_failed_attempt(ip_address, username):
         # we only want to increment the IP if this is disabled.
         ip_count = increment_key(get_ip_attempt_cache_key(ip_address))
         # if over the limit, add to block
-        if ip_count > config.FAILURE_LIMIT:
+        if ip_count > config.FAILURE_LIMIT_IP:
             block_ip(ip_address)
             ip_block = True
 
@@ -205,7 +205,7 @@ def record_failed_attempt(ip_address, username):
     if not config.DISABLE_USERNAME_LOCKOUT:
         user_count = increment_key(get_username_attempt_cache_key(username))
         # if over the limit, add to block
-        if user_count > config.FAILURE_LIMIT:
+        if user_count > config.FAILURE_LIMIT_USERNAME:
             block_username(username)
             user_block = True
 
@@ -277,7 +277,8 @@ def lockout_response(request):
         context = {
             'cooloff_time_seconds': config.COOLOFF_TIME,
             'cooloff_time_minutes': config.COOLOFF_TIME / 60,
-            'failure_limit': config.FAILURE_LIMIT,
+            'failure_limit_username': config.FAILURE_LIMIT_USERNAME,
+            'failure_limit_ip': config.FAILURE_LIMIT_IP,
         }
         return render(request, config.LOCKOUT_TEMPLATE, context)
 

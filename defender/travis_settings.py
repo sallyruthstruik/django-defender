@@ -59,7 +59,8 @@ SECRET_KEY = os.environ.get('SECRET_KEY', 'too-secret-for-test')
 
 LOGIN_REDIRECT_URL = '/admin'
 
-DEFENDER_LOGIN_FAILURE_LIMIT = 10
+DEFENDER_LOGIN_FAILURE_LIMIT_USERNAME = 10
+DEFENDER_LOGIN_FAILURE_LIMIT_IP = 10
 DEFENDER_COOLOFF_TIME = 2
 DEFENDER_REDIS_URL = "redis://localhost:6379/1"
 # don't use mock redis in unit tests, we will use real redis on travis.

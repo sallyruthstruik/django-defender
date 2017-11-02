@@ -17,7 +17,8 @@ DEFENDER_REDIS_NAME = get_setting('DEFENDER_REDIS_NAME')
 MOCK_REDIS = get_setting('DEFENDER_MOCK_REDIS', False)
 
 # see if the user has overridden the failure limit
-FAILURE_LIMIT = get_setting('DEFENDER_LOGIN_FAILURE_LIMIT', 3)
+FAILURE_LIMIT_USERNAME = get_setting('DEFENDER_LOGIN_FAILURE_LIMIT_USERNAME', 5)
+FAILURE_LIMIT_IP = get_setting('DEFENDER_LOGIN_FAILURE_LIMIT_IP', 10)
 
 # If this is True, the lockout checks to evaluate if the IP failure limit and
 # the username failure limit has been reached before issuing the lockout.
