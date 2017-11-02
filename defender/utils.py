@@ -8,7 +8,6 @@ from django.core.exceptions import ValidationError
 
 from .connection import get_redis_connection
 from . import config
-from .data import store_login_attempt
 
 REDIS_SERVER = get_redis_connection()
 
@@ -360,6 +359,3 @@ def add_login_attempt_to_db(request, login_valid,
         from .tasks import add_login_attempt_task
         add_login_attempt_task.delay(user_agent, ip_address, username,
                                      http_accept, path_info, login_valid)
-    else:
-        store_login_attempt(user_agent, ip_address, username,
-                            http_accept, path_info, login_valid)
