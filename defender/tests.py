@@ -13,13 +13,20 @@ from django import get_version
 from django.contrib.auth.models import User
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.sessions.backends.db import SessionStore
-from django.core.urlresolvers import reverse
 from django.http import HttpRequest, HttpResponse
 from django.test.client import RequestFactory
 from redis.client import Redis
+try:
+    from django.urls import reverse
+except ImportError:
+    from django.core.urlresolvers import reverse
 
 from . import utils
 from . import config
+from .signals import (
+    ip_block as ip_block_signal,
+    username_block as username_block_signal
+)
 from .connection import parse_redis_url, get_redis_connection
 from .decorators import watch_login
 from .models import AccessAttempt
@@ -169,6 +176,46 @@ class AccessAttemptTest(DefenderTestCase):
         response = self.client.get(ADMIN_LOGIN_URL)
         self.assertContains(response, self.LOCKED_MESSAGE)
 
+    @patch('defender.config.USERNAME_FAILURE_LIMIT', 3)
+    def test_username_failure_limit(self):
+        """ Tests that the username failure limit setting is
+        respected when trying to login one more time than failure limit
+        """
+        for i in range(0, config.USERNAME_FAILURE_LIMIT):
+            ip = '74.125.239.{0}.'.format(i)
+            response = self._login(username=VALID_USERNAME, remote_addr=ip)
+            # Check if we are in the same login page
+            self.assertContains(response, LOGIN_FORM_KEY)
+
+        # So, we shouldn't have gotten a lock-out yet.
+        # But we should get one now
+        response = self._login(username=VALID_USERNAME, remote_addr=ip)
+        self.assertContains(response, self.LOCKED_MESSAGE)
+
+        # doing a get should not get locked out message
+        response = self.client.get(ADMIN_LOGIN_URL)
+        self.assertContains(response, LOGIN_FORM_KEY)
+
+    @patch('defender.config.IP_FAILURE_LIMIT', 3)
+    def test_ip_failure_limit(self):
+        """ Tests that the IP failure limit setting is
+        respected when trying to login one more time than failure limit
+        """
+        for i in range(0, config.IP_FAILURE_LIMIT):
+            username = 'john-doe__%d' % i
+            response = self._login(username=username)
+            # Check if we are in the same login page
+            self.assertContains(response, LOGIN_FORM_KEY)
+
+        # So, we shouldn't have gotten a lock-out yet.
+        # But we should get one now
+        response = self._login(username=VALID_USERNAME)
+        self.assertContains(response, self.LOCKED_MESSAGE)
+
+        # doing a get should also get locked out message
+        response = self.client.get(ADMIN_LOGIN_URL)
+        self.assertContains(response, self.LOCKED_MESSAGE)
+
     def test_valid_login(self):
         """ Tests a valid login for a real username
         """
@@ -223,6 +270,23 @@ class AccessAttemptTest(DefenderTestCase):
         self.assertNotIn(UPPER_USERNAME, utils.get_blocked_usernames())
         self.assertIn(UPPER_USERNAME.lower(), utils.get_blocked_usernames())
 
+    def test_empty_username_cannot_be_blocked(self):
+        """
+        Test that an empty username, or one that is None, cannot be blocked.
+        """
+        for username in ["", None]:
+            for i in range(0, config.FAILURE_LIMIT + 2):
+                ip = '74.125.239.{0}.'.format(i)
+                self._login(username=username, remote_addr=ip)
+
+            self.assertNotIn(username, utils.get_blocked_usernames())
+
+    def test_lowercase(self):
+        """
+        Test that the lowercase(None) returns None.
+        """
+        self.assertEquals(utils.lower_username(None), None)
+
     def test_cooling_off(self):
         """ Tests if the cooling time allows a user to login
         """
@@ -246,8 +310,10 @@ class AccessAttemptTest(DefenderTestCase):
         """ Tests if can handle a long user agent
         """
         long_user_agent = 'ie6' * 1024
-        response = self._login(username=VALID_USERNAME, password=VALID_PASSWORD,
-                               user_agent=long_user_agent)
+        response = self._login(
+            username=VALID_USERNAME, password=VALID_PASSWORD,
+            user_agent=long_user_agent
+        )
         self.assertNotContains(response, LOGIN_FORM_KEY, status_code=302)
 
     @patch('defender.config.BEHIND_REVERSE_PROXY', True)
@@ -479,7 +545,8 @@ class AccessAttemptTest(DefenderTestCase):
     @patch('defender.config.DEFENDER_REDIS_NAME', 'bad-key')
     def test_get_redis_connection_django_conf_wrong_key(self):
         """ see if we get the correct error """
-        error_msg = 'The cache bad-key was not found on the django cache settings.'
+        error_msg = ('The cache bad-key was not found on the django '
+                     'cache settings.')
         self.assertRaisesMessage(KeyError, error_msg, get_redis_connection)
 
     def test_get_ip_address_from_request(self):
@@ -766,7 +833,7 @@ class AccessAttemptTest(DefenderTestCase):
         self.assertEqual(data_out, [])
 
     @patch('defender.config.BEHIND_REVERSE_PROXY', True)
-    @patch('defender.config.FAILURE_LIMIT', 3)
+    @patch('defender.config.IP_FAILURE_LIMIT', 3)
     def test_login_blocked_for_non_standard_login_views_without_msg(self):
         """
         Check that a view wich returns the expected status code is causing
@@ -798,7 +865,7 @@ class AccessAttemptTest(DefenderTestCase):
         self.assertEqual(data_out, ['192.168.24.24'])
 
     @patch('defender.config.BEHIND_REVERSE_PROXY', True)
-    @patch('defender.config.FAILURE_LIMIT', 3)
+    @patch('defender.config.IP_FAILURE_LIMIT', 3)
     def test_login_blocked_for_non_standard_login_views_with_msg(self):
         """
         Check that a view wich returns the expected status code and the
@@ -829,7 +896,7 @@ class AccessAttemptTest(DefenderTestCase):
         self.assertEqual(data_out, ['192.168.24.24'])
 
     @patch('defender.config.BEHIND_REVERSE_PROXY', True)
-    @patch('defender.config.FAILURE_LIMIT', 3)
+    @patch('defender.config.IP_FAILURE_LIMIT', 3)
     def test_login_non_blocked_for_non_standard_login_views_different_msg(self):
         """
         Check that a view wich returns the expected status code but not the
@@ -853,6 +920,31 @@ class AccessAttemptTest(DefenderTestCase):
 
             data_out = utils.get_blocked_ips()
             self.assertEqual(data_out, [])
+
+
+class SignalTest(DefenderTestCase):
+    """ Test that signals are properly sent when blocking usernames and IPs.
+    """
+
+    def test_should_send_signal_when_blocking_ip(self):
+        self.blocked_ip = None
+
+        def handler(sender, ip_address, **kwargs):
+            self.blocked_ip = ip_address
+
+        ip_block_signal.connect(handler)
+        utils.block_ip('8.8.8.8')
+        self.assertEqual(self.blocked_ip, '8.8.8.8')
+
+    def test_should_send_signal_when_blocking_username(self):
+        self.blocked_username = None
+
+        def handler(sender, username, **kwargs):
+            self.blocked_username = username
+
+        username_block_signal.connect(handler)
+        utils.block_username('richard_hendricks')
+        self.assertEqual(self.blocked_username, 'richard_hendricks')
 
 
 class DefenderTestCaseTest(DefenderTestCase):
@@ -909,3 +1001,26 @@ class TestUtils(DefenderTestCase):
         self.assertTrue(utils.is_source_ip_already_locked(ip))
         utils.unblock_ip(ip)
         self.assertFalse(utils.is_source_ip_already_locked(ip))
+
+    def test_username_argument_precedence(self):
+        """ test that the optional username argument has highest precedence
+        when provided """
+        request_factory = RequestFactory()
+        request = request_factory.get(ADMIN_LOGIN_URL)
+        request.user = AnonymousUser()
+        request.session = SessionStore()
+        username = 'johndoe'
+
+        utils.block_username(request.user.username)
+
+        self.assertFalse(utils.is_already_locked(request, username=username))
+
+        utils.check_request(request, True, username=username)
+        self.assertEqual(
+            utils.get_user_attempts(request, username=username), 1
+        )
+
+        utils.add_login_attempt_to_db(request, True, username=username)
+        self.assertEqual(
+            AccessAttempt.objects.filter(username=username).count(), 1
+        )

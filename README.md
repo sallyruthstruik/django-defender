@@ -24,6 +24,27 @@ If you are using defender on your site, submit a PR to add to the list.
 
 Versions
 ========
+- 0.5.5
+  - Added new setting ``DEFENDER_GET_USERNAME_FROM_REQUEST_PATH`` for control how username is accessed from request [@andrewshkovskii]
+  - Added new argument ``get_username`` for ``decorators.watch_login`` to propagate ``get_username`` argument to other utils functions calls done in ``watch_login`` [@andrewshkovskii]
+
+- 0.5.4
+  - Added 2 new setting variables for more granular failure limit control [@williamboman]
+  - Added ssl option when instantiating StrictRedis [@mjrimrie]
+  - Send signals when blocking username or ip [@williamboman]
+
+- 0.5.3
+  - Remove mockredis as install requirement, make only test requirement [@blueyed]
+
+- 0.5.2
+  - Fix regex in 'unblock_username_view' to handle special symbols [@ruthus18]
+  - Fix django requires version for 1.11.x [@kencochrane]
+  - remove hiredis dependency [@ericbuckley]
+  - Correctly get raw client when using django_redis cache. [@cburger]
+  - replace django.core.urlresolvers with django.urls For Django 2.0 [@s-wirth]
+  - add username kwarg for providing username directly rather than via callback arg [@williamboman]
+  - Only use the username if it is actually provided  [@cobusc]
+
 - 0.5.1
   - Middleware fix for django >= 1.10 #93 [@Temeez]
   - Force the username to lowercase #90 [@MattBlack85]
@@ -85,7 +106,8 @@ Features
     - list of blocked usernames and ip's
     - ability to unblock people
     - list of recent login attempts
-- Can be easly adapted to custom authentication method.
+- Can be easily adapted to custom authentication method.
+- Signals are sent when blocking username or IP
 
 Long term goals
 ===============
@@ -311,8 +333,14 @@ These should be defined in your ``settings.py`` file.
 
 * ``DEFENDER_LOGIN_FAILURE_LIMIT``: Int: The number of login attempts allowed before a
 record is created for the failed logins.  [Default: ``3``]
+* ``DEFENDER_LOGIN_FAILURE_LIMIT_USERNAME``: Int: The number of login attempts allowed
+on a username before a record is created for the failed logins.  [Default: ``DEFENDER_LOGIN_FAILURE_LIMIT``]
+* ``DEFENDER_LOGIN_FAILURE_LIMIT_IP``: Int: The number of login attempts allowed
+from an IP before a record is created for the failed logins.  [Default: ``DEFENDER_LOGIN_FAILURE_LIMIT``]
 * ``DEFENDER_BEHIND_REVERSE_PROXY``: Boolean: Is defender behind a reverse proxy?
 [Default: ``False``]
+* ``DEFENDER_REVERSE_PROXY_HEADER``: String: the name of the http header with your
+reverse proxy IP address  [Default: ``HTTP_X_FORWARDED_FOR``]
 * ``DEFENDER_LOCK_OUT_BY_IP_AND_USERNAME``: Boolean: Locks a user out based on a combination of IP and Username.  This stops a user denying access to the application for all other users accessing the app from behind the same IP address. [Default: ``False``]
 * ``DEFENDER_DISABLE_IP_LOCKOUT``: Boolean: If this is True, it will not lockout the users IP address, it will only lockout the username. [Default: False]
 * ``DEFENDER_DISABLE_USERNAME_LOCKOUT``: Boolean: If this is True, it will not lockout usernames, it will only lockout IP addresess. [Default: False]
@@ -325,8 +353,6 @@ number of seconds. If ``0``, the locks will not expire. [Default: ``300``]
    - ``failure_limit``: The number of failures before you get blocked.
 * ``DEFENDER_USERNAME_FORM_FIELD``: String: the name of the form field that contains your
 users usernames. [Default: ``username``]
-* ``DEFENDER_REVERSE_PROXY_HEADER``: String: the name of the http header with your
-reverse proxy IP address  [Default: ``HTTP_X_FORWARDED_FOR``]
 * ``DEFENDER_CACHE_PREFIX``: String: The cache prefix for your defender keys.
 [Default: ``defender``]
 * ``DEFENDER_LOCKOUT_URL``: String: The URL you want to redirect to if someone is
@@ -346,6 +372,9 @@ attempt to the database, set to True. If False, it is saved inline.
 long to keep the access attempt records in the database before the management
 command cleans them up.
 [Default: ``24``]
+* ``DEFENDER_GET_USERNAME_FROM_REQUEST_PATH``: String: The import path of the function that access username from request. 
+If you want to use custom function to access and process username from request - you can specify it here.
+[Default: ``defender.utils.username_from_request``]
 
 Adapting to other authentication method
 --------------------
@@ -430,6 +459,26 @@ class BasicAuthenticationDefender(BasicAuthentication):
 
 To make it works add `BasicAuthenticationDefender` to `DEFAULT_AUTHENTICATION_CLASSES` above all other authentication methods in your `settings.py`.
 
+
+Django Signals
+--------------------
+
+`django-defender` will send signals when blocking a username or an IP address. To set up signal receiver functions:
+
+```python
+from django.dispatch import receiver
+from defender import signals
+
+@receiver(signals.username_block)
+def username_blocked(username, **kwargs):
+    print("%s was blocked!" % username)
+
+@receiver(signals.ip_block)
+def ip_blocked(ip_address, **kwargs):
+    print("%s was blocked!" % ip_address)
+
+```
+
 Running Tests
 =============
 
@@ -445,3 +494,8 @@ With Code coverage:
 ```
 PYTHONPATH=$PYTHONPATH:$PWD coverage run --source=defender $(which django-admin.py) test defender --settings=defender.test_settings
 ```
+
+How to release
+==============
+1. python setup.py sdist
+2. twine upload dist/*

@@ -5,9 +5,12 @@ from django.http import HttpResponseRedirect
 from django.shortcuts import render
 from django.core.validators import validate_ipv46_address
 from django.core.exceptions import ValidationError
+from django.utils.module_loading import import_string
 
 from .connection import get_redis_connection
 from . import config
+from .signals import send_username_block_signal, send_ip_block_signal
+
 
 REDIS_SERVER = get_redis_connection()
 
@@ -127,19 +130,24 @@ def increment_key(key):
     return new_value
 
 
-def get_username_from_request(request):
+def username_from_request(request):
     """ unloads username from default POST request """
     if config.USERNAME_FORM_FIELD in request.POST:
         return request.POST[config.USERNAME_FORM_FIELD][:255]
     return None
 
 
-def get_user_attempts(request, get_username=get_username_from_request):
+get_username_from_request = import_string(
+    config.GET_USERNAME_FROM_REQUEST_PATH
+)
+
+
+def get_user_attempts(request, get_username=get_username_from_request, username=None):
     """ Returns number of access attempts for this ip, username
     """
     ip_address = get_ip(request)
 
-    username = lower_username(get_username(request))
+    username = lower_username(username or get_username(request))
 
     # get by IP
     ip_count = REDIS_SERVER.get(get_ip_attempt_cache_key(ip_address))
@@ -170,6 +178,7 @@ def block_ip(ip_address):
         REDIS_SERVER.set(key, 'blocked', config.COOLOFF_TIME)
     else:
         REDIS_SERVER.set(key, 'blocked')
+    send_ip_block_signal(ip_address)
 
 
 def block_username(username):
@@ -185,6 +194,7 @@ def block_username(username):
         REDIS_SERVER.set(key, 'blocked', config.COOLOFF_TIME)
     else:
         REDIS_SERVER.set(key, 'blocked')
+    send_username_block_signal(username)
 
 
 def record_failed_attempt(ip_address, username):
@@ -201,7 +211,7 @@ def record_failed_attempt(ip_address, username):
             ip_block = True
 
     user_block = False
-    if not config.DISABLE_USERNAME_LOCKOUT:
+    if username and not config.DISABLE_USERNAME_LOCKOUT:
         user_count = increment_key(get_username_attempt_cache_key(username))
         # if over the limit, add to block
         if user_count > config.FAILURE_LIMIT_USERNAME:
@@ -311,10 +321,10 @@ def is_source_ip_already_locked(ip_address):
     return REDIS_SERVER.get(get_ip_blocked_cache_key(ip_address))
 
 
-def is_already_locked(request, get_username=get_username_from_request):
+def is_already_locked(request, get_username=get_username_from_request, username=None):
     """Parse the username & IP from the request, and see if it's
     already locked."""
-    user_blocked = is_user_already_locked(get_username(request))
+    user_blocked = is_user_already_locked(username or get_username(request))
     ip_blocked = is_source_ip_already_locked(get_ip(request))
 
     if config.LOCKOUT_BY_IP_USERNAME:
@@ -325,10 +335,11 @@ def is_already_locked(request, get_username=get_username_from_request):
 
 
 def check_request(request, login_unsuccessful,
-                  get_username=get_username_from_request):
+                  get_username=get_username_from_request,
+                  username=None):
     """ check the request, and process results"""
     ip_address = get_ip(request)
-    username = get_username(request)
+    username = username or get_username(request)
 
     if not login_unsuccessful:
         # user logged in -- forget the failed attempts
@@ -340,7 +351,8 @@ def check_request(request, login_unsuccessful,
 
 
 def add_login_attempt_to_db(request, login_valid,
-                            get_username=get_username_from_request):
+                            get_username=get_username_from_request,
+                            username=None):
     """ Create a record for the login attempt If using celery call celery
     task, if not, call the method normally """
 
@@ -348,7 +360,7 @@ def add_login_attempt_to_db(request, login_valid,
         # If we don't want to store in the database, then don't proceed.
         return
 
-    username = get_username(request)
+    username = username or get_username(request)
 
     user_agent = request.META.get('HTTP_USER_AGENT', '<unknown>')[:255]
     ip_address = get_ip(request)
